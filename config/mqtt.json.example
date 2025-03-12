@@ -1,0 +1,15 @@
+{
+    "debug": false,
+    "log_invalid_cookie": false,
+    "udp_server": {
+      "public_ip": "your-server-ip",
+      "port": 8884
+    },
+    "development": {
+      "mac_addresss": ["aa:bb:cc:dd:ee:ff"],
+      "chat_servers": ["wss://dev-chat-server.example.com/ws"]
+    },
+    "production": {
+      "chat_servers": ["wss://chat-server.example.com/ws"]
+    }
+  }
