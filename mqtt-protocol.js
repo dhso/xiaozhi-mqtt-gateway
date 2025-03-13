@@ -75,7 +75,12 @@ class MQTTProtocol extends EventEmitter {
                 }
                 
                 // 提取完整的消息
-                const message = this.buffer.slice(0, messageLength);
+                const message = this.buffer.subarray(0, messageLength);
+                if (!this.isConnected && type !== PacketType.CONNECT) {
+                    debug('未连接时收到非CONNECT消息，关闭连接');
+                    this.socket.end();
+                    return;
+                }
                 
                 // 根据消息类型处理
                 switch (type) {
@@ -100,7 +105,7 @@ class MQTTProtocol extends EventEmitter {
                 }
                 
                 // 从缓冲区中移除已处理的消息
-                this.buffer = this.buffer.slice(messageLength);
+                this.buffer = this.buffer.subarray(messageLength);
                 
             } catch (err) {
                 debug('处理消息错误:', err);

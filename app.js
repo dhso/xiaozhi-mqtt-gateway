@@ -170,7 +170,7 @@ class MQTTConnection {
         });
 
         this.protocol.on('close', () => {
-            console.log(`${this.macAddress} 客户端断开连接`);
+            debug(`${this.macAddress} 客户端断开连接`);
             this.server.removeConnection(this);
         });
 
@@ -321,18 +321,6 @@ class MQTTConnection {
     }
 
     async parseHelloMessage(json) {
-        if (this.bridge) {
-            console.warn(`${this.macAddress} 收到重复 hello 消息，关闭之前的 bridge`);
-            this.bridge.close();
-        }
-        this.bridge = new WebSocketBridge(this, json.version, this.macAddress);
-        this.bridge.on('close', () => {
-            this.sendMqttMessage(JSON.stringify({ type: 'goodbye', session_id: this.udp.session_id }));
-            this.bridge = null;
-            if (this.closing) {
-                this.protocol.close();
-            }
-        });
         const session_id = uuidv4().split('-')[0];
         const cookie = Math.floor(Math.random() * 0xFFFF);
         this.udp = {
@@ -343,11 +331,27 @@ class MQTTConnection {
             nonce: this.generateUdpHeader(this.macAddress, 0, cookie, 0),
             encryption: 'aes-128-ctr',
             remoteSequence: 0,
-            localSequence: 0
+            localSequence: 0,
+            startTime: Date.now()
         }
 
+        if (this.bridge) {
+            console.warn(`${this.macAddress} 收到重复 hello 消息，关闭之前的 bridge`);
+            this.bridge.close();
+        }
+        this.bridge = new WebSocketBridge(this, json.version, this.macAddress);
+        this.bridge.on('close', () => {
+            const seconds = (Date.now() - this.udp.startTime) / 1000;
+            console.log(`通话结束: ${this.macAddress} Session: ${this.udp.session_id} Duration: ${seconds}s`);
+            this.sendMqttMessage(JSON.stringify({ type: 'goodbye', session_id: this.udp.session_id }));
+            this.bridge = null;
+            if (this.closing) {
+                this.protocol.close();
+            }
+        });
+
         try {
-            console.log(`设备连接: ${this.macAddress} Protocol: ${json.version} Session: ${this.udp.session_id} ${this.bridge.chatServer}`);
+            console.log(`通话开始: ${this.macAddress} Protocol: ${json.version} Session: ${this.udp.session_id} ${this.bridge.chatServer}`);
             const audio_params = await this.bridge.connect(json.audio_params);
             const udp_server = configManager.get('udp_server');
             this.sendMqttMessage(JSON.stringify({
@@ -425,7 +429,7 @@ class MQTTServer {
         this.udpPort = udpPort;
         this.connections = new Map(); // clientId -> MQTTConnection
         this.keepAliveTimer = null;
-        this.keepAliveCheckInterval = 10000; // 默认每10秒检查一次
+        this.keepAliveCheckInterval = 1000; // 默认每1秒检查一次
 
         this.headerBuffer = Buffer.alloc(16);
     }
@@ -473,7 +477,7 @@ class MQTTServer {
 
             const activeCount = Array.from(this.connections.values()).filter(connection => connection.isAlive()).length;
             if (activeCount !== this.lastActiveConnectionCount || this.connections.size !== this.lastConnectionCount) {
-                console.warn(`连接数: ${this.connections.size}, 活跃数: ${activeCount}`);
+                console.log(`连接数: ${this.connections.size}, 活跃数: ${activeCount}`);
                 this.lastActiveConnectionCount = activeCount;
                 this.lastConnectionCount = this.connections.size;
             }
@@ -494,7 +498,7 @@ class MQTTServer {
         // 检查是否已存在相同 macAddress 的连接
         const existingConnection = this.connections.get(connection.macAddress);
         if (existingConnection) {
-            console.warn(`${connection.macAddress} 已存在连接，关闭旧连接`);
+            debug(`${connection.macAddress} 已存在连接，关闭旧连接`);
             existingConnection.close();
             this.connections.delete(connection.macAddress);
         }
@@ -506,8 +510,6 @@ class MQTTServer {
         const currentConnection = this.connections.get(connection.macAddress);
         if (currentConnection === connection) {
             this.connections.delete(connection.macAddress);
-        } else {
-            debug(`${connection.macAddress} 连接已更新，忽略旧连接的删除请求`);
         }
     }
 
