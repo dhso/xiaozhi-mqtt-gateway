@@ -11,12 +11,6 @@
         "mac_addresss": [
         ]
     },
-    "audio_params": {
-        "format": "opus",
-        "sample_rate": 24000,
-        "channels": 1,
-        "frame_duration": 60
-    },
     "log_invalid_cookie": false,
     "debug": false
 }

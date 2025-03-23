@@ -452,7 +452,7 @@ class MQTTServer {
           setTimeout(() => { process.exit(1); }, 1000);
         });
         this.udpServer.bind(this.udpPort, () => {
-          console.warn(`UDP 服务器正在监听端口 ${this.udpPort}`);
+          console.warn(`UDP 服务器正在监听 ${this.publicIp}:${this.udpPort}`);
         });
 
         // 启动全局心跳检查定时器
