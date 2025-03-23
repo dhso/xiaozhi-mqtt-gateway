@@ -175,12 +175,12 @@ class MQTTConnection {
         });
 
         this.protocol.on('error', (err) => {
-            console.error(`${this.macAddress} 连接错误:`, err);
+            debug(`${this.macAddress} 连接错误:`, err);
             this.server.removeConnection(this);
         });
 
         this.protocol.on('protocolError', (err) => {
-            console.error(`${this.macAddress} 协议错误:`, err);
+            debug(`${this.macAddress} 协议错误:`, err);
             this.protocol.close();
         });
     }
@@ -299,7 +299,7 @@ class MQTTConnection {
 
     sendUdpMessage(payload) {
         if (!this.udp.remoteAddress) {
-            console.warn(`设备 ${this.macAddress} 未连接，无法发送 UDP 消息`);
+            debug(`设备 ${this.macAddress} 未连接，无法发送 UDP 消息`);
             return;
         }
         this.udp.localSequence++;
@@ -336,7 +336,7 @@ class MQTTConnection {
         }
 
         if (this.bridge) {
-            console.warn(`${this.macAddress} 收到重复 hello 消息，关闭之前的 bridge`);
+            debug(`${this.macAddress} 收到重复 hello 消息，关闭之前的 bridge`);
             this.bridge.close();
         }
         this.bridge = new WebSocketBridge(this, json.version, this.macAddress);
@@ -353,15 +353,14 @@ class MQTTConnection {
         try {
             console.log(`通话开始: ${this.macAddress} Protocol: ${json.version} Session: ${this.udp.session_id} ${this.bridge.chatServer}`);
             const audio_params = await this.bridge.connect(json.audio_params);
-            const udp_server = configManager.get('udp_server');
             this.sendMqttMessage(JSON.stringify({
                 type: 'hello',
                 version: json.version,
                 session_id: this.udp.session_id,
                 transport: 'udp',
                 udp: {
-                    server: udp_server.public_ip,
-                    port: udp_server.port,
+                    server: this.server.publicIp,
+                    port: this.server.udpPort,
                     encryption: this.udp.encryption,
                     key: this.udp.key.toString('hex'),
                     nonce: this.udp.nonce.toString('hex'),
@@ -400,7 +399,7 @@ class MQTTConnection {
         }
         if (cookie !== this.udp.cookie) {
             if (configManager.get('log_invalid_cookie')) {
-                console.warn(`cookie 不匹配 ${this.macAddress} ${cookie} ${this.udp.cookie}`);
+                debug(`cookie 不匹配 ${this.macAddress} ${cookie} ${this.udp.cookie}`);
             }
             return;
         }
@@ -424,9 +423,10 @@ class MQTTConnection {
 }
 
 class MQTTServer {
-    constructor(port = 1883, udpPort = 8884) {
-        this.port = port;
-        this.udpPort = udpPort;
+    constructor() {
+        this.mqttPort = parseInt(process.env.MQTT_PORT) || 1883;
+        this.udpPort = parseInt(process.env.UDP_PORT) || 8884;
+        this.publicIp = process.env.PUBLIC_IP || 'mqtt.xiaozhi.me';
         this.connections = new Map(); // clientId -> MQTTConnection
         this.keepAliveTimer = null;
         this.keepAliveCheckInterval = 1000; // 默认每1秒检查一次
@@ -440,8 +440,8 @@ class MQTTServer {
             new MQTTConnection(socket, this);
         });
 
-        this.mqttServer.listen(this.port, () => {
-            console.warn(`MQTT 服务器正在监听端口 ${this.port}`);
+        this.mqttServer.listen(this.mqttPort, () => {
+            console.warn(`MQTT 服务器正在监听端口 ${this.mqttPort}`);
         });
 
 
