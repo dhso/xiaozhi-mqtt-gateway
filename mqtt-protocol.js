@@ -184,6 +184,17 @@ class MQTTProtocol extends EventEmitter {
         
         // 协议级别，4为MQTT 3.1.1
         const protocolLevel = message[pos];
+        
+        // 检查协议版本
+        if (protocolLevel !== 4) {  // 4 表示 MQTT 3.1.1
+            debug('不支持的协议版本:', protocolLevel);
+            // 发送 CONNACK，使用不支持的协议版本的返回码 (0x01)
+            this.sendConnack(1, false);
+            // 关闭连接
+            this.socket.end();
+            return;
+        }
+        
         pos += 1;
         
         // 连接标志
