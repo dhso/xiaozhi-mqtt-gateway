@@ -81,7 +81,7 @@ class WebSocketBridge extends Emitter {
                     // JSON数据通过MQTT发送
                     const message = JSON.parse(data.toString());
                     if (message.type === 'hello') {
-                        resolve(message.audio_params);
+                        resolve(message);
                     } else {
                         this.connection.sendMqttMessage(JSON.stringify(message));
                     }
@@ -321,11 +321,9 @@ class MQTTConnection {
     }
 
     async parseHelloMessage(json) {
-        const session_id = uuidv4().split('-')[0];
         const cookie = Math.floor(Math.random() * 0xFFFF);
         this.udp = {
             ...this.udp,
-            session_id,
             cookie,
             key: crypto.randomBytes(16),
             nonce: this.generateUdpHeader(this.macAddress, 0, cookie, 0),
@@ -338,6 +336,7 @@ class MQTTConnection {
         if (this.bridge) {
             debug(`${this.macAddress} 收到重复 hello 消息，关闭之前的 bridge`);
             this.bridge.close();
+            await new Promise(resolve => setTimeout(resolve, 100));
         }
         this.bridge = new WebSocketBridge(this, json.version, this.macAddress);
         this.bridge.on('close', () => {
@@ -351,8 +350,9 @@ class MQTTConnection {
         });
 
         try {
-            console.log(`通话开始: ${this.macAddress} Protocol: ${json.version} Session: ${this.udp.session_id} ${this.bridge.chatServer}`);
-            const audio_params = await this.bridge.connect(json.audio_params);
+            console.log(`通话开始: ${this.macAddress} Protocol: ${json.version} ${this.bridge.chatServer}`);
+            const helloReply = await this.bridge.connect(json.audio_params);
+            this.udp.session_id = helloReply.session_id;
             this.sendMqttMessage(JSON.stringify({
                 type: 'hello',
                 version: json.version,
@@ -365,7 +365,7 @@ class MQTTConnection {
                     key: this.udp.key.toString('hex'),
                     nonce: this.udp.nonce.toString('hex'),
                 },
-                audio_params
+                audio_params: helloReply.audio_params
             }));
         } catch (error) {
             this.sendMqttMessage(JSON.stringify({ type: 'error', message: '处理 hello 消息失败' }));
