@@ -176,11 +176,18 @@ class MQTTProtocol extends EventEmitter {
      * @param {Buffer} message - 完整的CONNECT消息
      */
     parseConnect(message) {
-        const protocolLength = message.readUInt16BE(2);
-        const protocol = message.toString('utf8', 4, 4 + protocolLength);
+        // 解析剩余长度
+        const { value: remainingLength, bytesRead } = this.decodeRemainingLength(message);
         
-        // 跳过固定头部和协议名称后的位置
-        let pos = 4 + protocolLength;
+        // 固定头部之后的位置 (MQTT固定头部第一个字节 + Remaining Length字段的字节)
+        const headerLength = 1 + bytesRead;
+        
+        // 从可变头部开始位置读取协议名长度
+        const protocolLength = message.readUInt16BE(headerLength);
+        const protocol = message.toString('utf8', headerLength + 2, headerLength + 2 + protocolLength);
+        
+        // 更新位置指针，跳过协议名
+        let pos = headerLength + 2 + protocolLength;
         
         // 协议级别，4为MQTT 3.1.1
         const protocolLevel = message[pos];

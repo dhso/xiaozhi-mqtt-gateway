@@ -425,7 +425,7 @@ class MQTTConnection {
 class MQTTServer {
     constructor() {
         this.mqttPort = parseInt(process.env.MQTT_PORT) || 1883;
-        this.udpPort = parseInt(process.env.UDP_PORT) || 8884;
+        this.udpPort = parseInt(process.env.UDP_PORT) || this.mqttPort;
         this.publicIp = process.env.PUBLIC_IP || 'mqtt.xiaozhi.me';
         this.connections = new Map(); // clientId -> MQTTConnection
         this.keepAliveTimer = null;
