@@ -13,6 +13,8 @@ const WebSocket = require('ws');
 const { v4: uuidv4 } = require('uuid');
 const { MQTTProtocol } = require('./mqtt-protocol');
 const { ConfigManager } = require('./utils/config-manager');
+const { validateMqttCredentials } = require('./utils/mqtt_config_v2');
+
 
 function setDebugEnabled(enabled) {
     if (enabled) {
@@ -30,10 +32,12 @@ configManager.on('configChanged', (config) => {
 setDebugEnabled(configManager.get('debug'));
 
 class WebSocketBridge extends Emitter {
-    constructor(connection, protocolVersion, macAddress) {
+    constructor(connection, protocolVersion, macAddress, uuid, userData) {
         super();
         this.connection = connection;
         this.macAddress = macAddress;
+        this.uuid = uuid;
+        this.userData = userData;
         this.wsClient = null;
         this.protocolVersion = protocolVersion;
         this.deviceSaidGoodbye = false;
@@ -56,13 +60,18 @@ class WebSocketBridge extends Emitter {
 
     async connect(audio_params) {
         return new Promise((resolve, reject) => {
-            this.wsClient = new WebSocket(this.chatServer, {
-                headers: {
-                    'device-id': this.macAddress,
-                    'protocol-version': '1',
-                    'authorization': `Bearer test-token`
-                }
-            });
+            const headers = {
+                'device-id': this.macAddress,
+                'protocol-version': '1',
+                'authorization': `Bearer test-token`
+            };
+            if (this.uuid) {
+                headers['client-id'] = this.uuid;
+            }
+            if (this.userData && this.userData.ip) {
+                headers['x-forwarded-for'] = this.userData.ip;
+            } 
+            this.wsClient = new WebSocket(this.chatServer, { headers });
 
             this.wsClient.on('open', () => {
                 this.sendJson({
@@ -193,24 +202,33 @@ class MQTTConnection {
         debug('客户端连接:', { 
             clientId: this.clientId,
             username: this.username,
+            password: this.password,
             protocol: connectData.protocol,
             protocolLevel: connectData.protocolLevel,
             keepAlive: connectData.keepAlive
         });
 
         const parts = this.clientId.split('@@@');
-        if (parts.length !== 2) {
-            debug('无效的设备ID:', this.clientId);
+        if (parts.length === 3) { // GID_test@@@mac_address@@@uuid
+            const validated = validateMqttCredentials(this.clientId, this.username, this.password);
+            this.groupId = validated.groupId;
+            this.macAddress = validated.macAddress;
+            this.uuid = validated.uuid;
+            this.userData = validated.userData;
+        } else if (parts.length === 2) { // GID_test@@@mac_address
+            this.groupId = parts[0];
+            this.macAddress = parts[1].replace(/_/g, ':');
+        } else {
+            debug('无效的 clientId:', this.clientId);
             this.close();
             return;
         }
-        this.macAddress = parts[1].replace(/_/g, ':');
         if (!MacAddressRegex.test(this.macAddress)) {
-            debug('无效的设备ID:', this.macAddress);
+            debug('无效的 macAddress:', this.macAddress);
             this.close();
             return;
         }
-        this.replyTo = `devices/p2p/${this.macAddress}`;
+        this.replyTo = `devices/p2p/${parts[1]}`;
         
         this.server.addConnection(this);
     }
@@ -338,7 +356,7 @@ class MQTTConnection {
             this.bridge.close();
             await new Promise(resolve => setTimeout(resolve, 100));
         }
-        this.bridge = new WebSocketBridge(this, json.version, this.macAddress);
+        this.bridge = new WebSocketBridge(this, json.version, this.macAddress, this.uuid, this.userData);
         this.bridge.on('close', () => {
             const seconds = (Date.now() - this.udp.startTime) / 1000;
             console.log(`通话结束: ${this.macAddress} Session: ${this.udp.session_id} Duration: ${seconds}s`);

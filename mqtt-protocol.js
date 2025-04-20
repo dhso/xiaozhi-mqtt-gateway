@@ -108,7 +108,6 @@ class MQTTProtocol extends EventEmitter {
                 this.buffer = this.buffer.subarray(messageLength);
                 
             } catch (err) {
-                debug('处理消息错误:', err);
                 // 如果解析出错，可能是数据不完整，等待更多数据
                 if (err.message === 'Malformed Remaining Length') {
                     return;
