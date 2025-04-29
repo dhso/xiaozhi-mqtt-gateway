@@ -10,7 +10,6 @@ const crypto = require('crypto');
 const dgram = require('dgram');
 const Emitter = require('events');
 const WebSocket = require('ws');
-const { v4: uuidv4 } = require('uuid');
 const { MQTTProtocol } = require('./mqtt-protocol');
 const { ConfigManager } = require('./utils/config-manager');
 const { validateMqttCredentials } = require('./utils/mqtt_config_v2');
@@ -62,7 +61,7 @@ class WebSocketBridge extends Emitter {
         return new Promise((resolve, reject) => {
             const headers = {
                 'device-id': this.macAddress,
-                'protocol-version': '1',
+                'protocol-version': '2',
                 'authorization': `Bearer test-token`
             };
             if (this.uuid) {
@@ -76,7 +75,7 @@ class WebSocketBridge extends Emitter {
             this.wsClient.on('open', () => {
                 this.sendJson({
                     type: 'hello',
-                    version: 1,
+                    version: 2,
                     transport: 'websocket',
                     audio_params
                 });
@@ -84,8 +83,11 @@ class WebSocketBridge extends Emitter {
 
             this.wsClient.on('message', (data, isBinary) => {
                 if (isBinary) {
+                    const timestamp = data.readUInt32BE(8);
+                    const opusLength = data.readUInt32BE(12);
+                    const opus = data.subarray(16, 16 + opusLength);
                     // 二进制数据通过UDP发送
-                    this.connection.sendUdpMessage(data);
+                    this.connection.sendUdpMessage(opus, timestamp);
                 } else {
                     // JSON数据通过MQTT发送
                     const message = JSON.parse(data.toString());
@@ -115,9 +117,13 @@ class WebSocketBridge extends Emitter {
         }
     }
 
-    sendAudio(opus) {
+    sendAudio(opus, timestamp) {
         if (this.wsClient && this.wsClient.readyState === WebSocket.OPEN) {
-            this.wsClient.send(opus, { binary: true });
+            const buffer = Buffer.alloc(16 + opus.length);
+            buffer.writeUInt32BE(timestamp, 8);
+            buffer.writeUInt32BE(opus.length, 12);
+            buffer.set(opus, 16);
+            this.wsClient.send(buffer, { binary: true });
         }
     }
 
@@ -140,8 +146,9 @@ const MacAddressRegex = /^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/;
  * 负责应用层逻辑处理
  */
 class MQTTConnection {
-    constructor(socket, server) {
+    constructor(socket, connectionId, server) {
         this.server = server;
+        this.connectionId = connectionId;
         this.clientId = null;
         this.username = null;
         this.password = null;
@@ -179,18 +186,18 @@ class MQTTConnection {
         });
 
         this.protocol.on('close', () => {
-            debug(`${this.macAddress} 客户端断开连接`);
+            debug(`${this.clientId} 客户端断开连接`);
             this.server.removeConnection(this);
         });
 
         this.protocol.on('error', (err) => {
-            debug(`${this.macAddress} 连接错误:`, err);
-            this.server.removeConnection(this);
+            debug(`${this.clientId} 连接错误:`, err);
+            this.close();
         });
 
         this.protocol.on('protocolError', (err) => {
-            debug(`${this.macAddress} 协议错误:`, err);
-            this.protocol.close();
+            debug(`${this.clientId} 协议错误:`, err);
+            this.close();
         });
     }
 
@@ -218,13 +225,13 @@ class MQTTConnection {
         } else if (parts.length === 2) { // GID_test@@@mac_address
             this.groupId = parts[0];
             this.macAddress = parts[1].replace(/_/g, ':');
+            if (!MacAddressRegex.test(this.macAddress)) {
+                debug('无效的 macAddress:', this.macAddress);
+                this.close();
+                return;
+            }
         } else {
             debug('无效的 clientId:', this.clientId);
-            this.close();
-            return;
-        }
-        if (!MacAddressRegex.test(this.macAddress)) {
-            debug('无效的 macAddress:', this.macAddress);
             this.close();
             return;
         }
@@ -287,7 +294,7 @@ class MQTTConnection {
         
         if (publishData.qos !== 0) {
             debug('不支持的 QoS 级别:', publishData.qos, '关闭连接');
-            this.protocol.close();
+            this.close();
             return;
         }
 
@@ -295,17 +302,17 @@ class MQTTConnection {
         if (json.type === 'hello') {
             if (json.version !== 3) {
                 debug('不支持的协议版本:', json.version, '关闭连接');
-                this.protocol.close();
+                this.close();
                 return;
             }
             this.parseHelloMessage(json).catch(error => {
                 debug('处理 hello 消息失败:', error);
-                this.protocol.close();
+                this.close();
             });
         } else {
             this.parseOtherMessage(json).catch(error => {
                 debug('处理其他消息失败:', error);
-                this.protocol.close();
+                this.close();
             });
         }
     }
@@ -315,36 +322,33 @@ class MQTTConnection {
         this.protocol.sendPublish(this.replyTo, payload, 0, false, false);
     }
 
-    sendUdpMessage(payload) {
+    sendUdpMessage(payload, timestamp) {
         if (!this.udp.remoteAddress) {
-            debug(`设备 ${this.macAddress} 未连接，无法发送 UDP 消息`);
+            debug(`设备 ${this.clientId} 未连接，无法发送 UDP 消息`);
             return;
         }
         this.udp.localSequence++;
-        const header = this.generateUdpHeader(this.macAddress, payload.length, this.udp.cookie, this.udp.localSequence);
+        const header = this.generateUdpHeader(payload.length, timestamp, this.udp.localSequence);
         const cipher = crypto.createCipheriv(this.udp.encryption, this.udp.key, header);
         const message = Buffer.concat([header, cipher.update(payload), cipher.final()]);
         this.server.sendUdpMessage(message, this.udp.remoteAddress);
     }
 
-    generateUdpHeader(macAddress, length, cookie, sequence) {
+    generateUdpHeader(length, timestamp, sequence) {
       // 重用预分配的缓冲区
       this.headerBuffer.writeUInt8(1, 0);
       this.headerBuffer.writeUInt16BE(length, 2);
-      const mac = macAddress.split(':').map(byte => parseInt(byte, 16));
-      this.headerBuffer.set(mac, 4);
-      this.headerBuffer.writeUInt16BE(cookie, 10);
+      this.headerBuffer.writeUInt32BE(this.connectionId, 4);
+      this.headerBuffer.writeUInt32BE(timestamp, 8);
       this.headerBuffer.writeUInt32BE(sequence, 12);
       return Buffer.from(this.headerBuffer); // 返回副本以避免并发问题
     }
 
     async parseHelloMessage(json) {
-        const cookie = Math.floor(Math.random() * 0xFFFF);
         this.udp = {
             ...this.udp,
-            cookie,
             key: crypto.randomBytes(16),
-            nonce: this.generateUdpHeader(this.macAddress, 0, cookie, 0),
+            nonce: this.generateUdpHeader(0, 0, 0),
             encryption: 'aes-128-ctr',
             remoteSequence: 0,
             localSequence: 0,
@@ -352,14 +356,14 @@ class MQTTConnection {
         }
 
         if (this.bridge) {
-            debug(`${this.macAddress} 收到重复 hello 消息，关闭之前的 bridge`);
+            debug(`${this.clientId} 收到重复 hello 消息，关闭之前的 bridge`);
             this.bridge.close();
             await new Promise(resolve => setTimeout(resolve, 100));
         }
         this.bridge = new WebSocketBridge(this, json.version, this.macAddress, this.uuid, this.userData);
         this.bridge.on('close', () => {
             const seconds = (Date.now() - this.udp.startTime) / 1000;
-            console.log(`通话结束: ${this.macAddress} Session: ${this.udp.session_id} Duration: ${seconds}s`);
+            console.log(`通话结束: ${this.clientId} Session: ${this.udp.session_id} Duration: ${seconds}s`);
             this.sendMqttMessage(JSON.stringify({ type: 'goodbye', session_id: this.udp.session_id }));
             this.bridge = null;
             if (this.closing) {
@@ -368,7 +372,7 @@ class MQTTConnection {
         });
 
         try {
-            console.log(`通话开始: ${this.macAddress} Protocol: ${json.version} ${this.bridge.chatServer}`);
+            console.log(`通话开始: ${this.clientId} Protocol: ${json.version} ${this.bridge.chatServer}`);
             const helloReply = await this.bridge.connect(json.audio_params);
             this.udp.session_id = helloReply.session_id;
             this.sendMqttMessage(JSON.stringify({
@@ -387,7 +391,7 @@ class MQTTConnection {
             }));
         } catch (error) {
             this.sendMqttMessage(JSON.stringify({ type: 'error', message: '处理 hello 消息失败' }));
-            console.error(`${this.macAddress} 处理 hello 消息失败: ${error}`);
+            console.error(`${this.clientId} 处理 hello 消息失败: ${error}`);
         }
     }
 
@@ -408,18 +412,12 @@ class MQTTConnection {
         this.bridge.sendJson(json);
     }
 
-    onUdpMessage(rinfo, message, payloadLength, cookie, sequence) {
+    onUdpMessage(rinfo, message, payloadLength, timestamp, sequence) {
         if (!this.bridge) {
             return;
         }
         if (this.udp.remoteAddress !== rinfo) {
             this.udp.remoteAddress = rinfo;
-        }
-        if (cookie !== this.udp.cookie) {
-            if (configManager.get('log_invalid_cookie')) {
-                debug(`cookie 不匹配 ${this.macAddress} ${cookie} ${this.udp.cookie}`);
-            }
-            return;
         }
         if (sequence < this.udp.remoteSequence) {
             return;
@@ -431,7 +429,7 @@ class MQTTConnection {
         const cipher = crypto.createDecipheriv(this.udp.encryption, this.udp.key, header);
         const payload = Buffer.concat([cipher.update(encryptedPayload), cipher.final()]);
         
-        this.bridge.sendAudio(payload);
+        this.bridge.sendAudio(payload, timestamp);
         this.udp.remoteSequence = sequence;
     }
 
@@ -452,10 +450,20 @@ class MQTTServer {
         this.headerBuffer = Buffer.alloc(16);
     }
 
+    generateNewConnectionId() {
+        // 生成一个32位不重复的整数
+        let id;
+        do {
+            id = Math.floor(Math.random() * 0xFFFFFFFF);
+        } while (this.connections.has(id));
+        return id;
+    }
+
     start() {
         this.mqttServer = net.createServer((socket) => {
-            debug('新客户端连接');
-            new MQTTConnection(socket, this);
+            const connectionId = this.generateNewConnectionId();
+            debug(`新客户端连接: ${connectionId}`);
+            new MQTTConnection(socket, connectionId, this);
         });
 
         this.mqttServer.listen(this.mqttPort, () => {
@@ -513,21 +521,20 @@ class MQTTServer {
     }
 
     addConnection(connection) {
-        // 检查是否已存在相同 macAddress 的连接
-        const existingConnection = this.connections.get(connection.macAddress);
-        if (existingConnection) {
-            debug(`${connection.macAddress} 已存在连接，关闭旧连接`);
-            existingConnection.close();
-            this.connections.delete(connection.macAddress);
+        // 检查是否已存在相同 clientId 的连接
+        for (const [key, value] of this.connections.entries()) {
+            if (value.clientId === connection.clientId) {
+                debug(`${connection.clientId} 已存在连接，关闭旧连接`);
+                value.close();
+            }
         }
-        this.connections.set(connection.macAddress, connection);
+        this.connections.set(connection.connectionId, connection);
     }
 
     removeConnection(connection) {
-        // 检查当前存储的连接是否与要删除的连接是同一个实例
-        const currentConnection = this.connections.get(connection.macAddress);
-        if (currentConnection === connection) {
-            this.connections.delete(connection.macAddress);
+        debug(`关闭连接: ${connection.connectionId}`);
+        if (this.connections.has(connection.connectionId)) {
+            this.connections.delete(connection.connectionId);
         }
     }
 
@@ -536,7 +543,7 @@ class MQTTServer {
     }
 
     onUdpMessage(message, rinfo) {
-        // message format: [type: 1u, flag: 1u, payloadLength: 2u, mac: 6u, ssrc: 2u, sequence: 4u, payload: n]
+        // message format: [type: 1u, flag: 1u, payloadLength: 2u, cookie: 4u, timestamp: 4u, sequence: 4u, payload: n]
         if (message.length < 16) {
             console.warn('收到不完整的 UDP Header', rinfo);
             return;
@@ -549,15 +556,14 @@ class MQTTServer {
             const payloadLength = message.readUInt16BE(2);
             if (message.length < 16 + payloadLength) return;
     
-            const mac = message.slice(4, 10);
-            const macAddress = mac.toString('hex').match(/.{1,2}/g).join(':');
-            const connection = this.connections.get(macAddress);
+            const connectionId = message.readUInt32BE(4);
+            const connection = this.connections.get(connectionId);
             if (!connection) return;
     
-            const cookie = message.readUInt16BE(10);
+            const timestamp = message.readUInt32BE(8);
             const sequence = message.readUInt32BE(12);
             
-            connection.onUdpMessage(rinfo, message, payloadLength, cookie, sequence);
+            connection.onUdpMessage(rinfo, message, payloadLength, timestamp, sequence);
         } catch (error) {
             console.error('UDP 消息处理错误:', error);
         }
