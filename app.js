@@ -57,7 +57,7 @@ class WebSocketBridge extends Emitter {
         this.chatServer = chatServers[Math.floor(Math.random() * chatServers.length)];
     }
 
-    async connect(audio_params) {
+    async connect(audio_params, features) {
         return new Promise((resolve, reject) => {
             const headers = {
                 'device-id': this.macAddress,
@@ -77,7 +77,8 @@ class WebSocketBridge extends Emitter {
                     type: 'hello',
                     version: 2,
                     transport: 'websocket',
-                    audio_params
+                    audio_params,
+                    features
                 });
             });
 
@@ -373,7 +374,7 @@ class MQTTConnection {
 
         try {
             console.log(`通话开始: ${this.clientId} Protocol: ${json.version} ${this.bridge.chatServer}`);
-            const helloReply = await this.bridge.connect(json.audio_params);
+            const helloReply = await this.bridge.connect(json.audio_params, json.features);
             this.udp.session_id = helloReply.session_id;
             this.sendMqttMessage(JSON.stringify({
                 type: 'hello',
