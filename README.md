@@ -4,8 +4,6 @@
 
 这是一个用于物联网设备通信的桥接服务，实现了MQTT和UDP协议到WebSocket的转换。该服务允许设备通过MQTT协议进行控制消息传输，同时通过UDP协议高效传输音频数据，并将这些数据桥接到WebSocket服务。
 
-作者: terrence@tenclass.com
-
 ## 功能特点
 
 - **多协议支持**: 同时支持MQTT、UDP和WebSocket协议
@@ -33,6 +31,7 @@
 ├── .env                  # 环境变量配置
 ├── utils/
 │   ├── config-manager.js # 配置管理工具
+│   ├── mqtt_config_v2.js # MQTT配置验证工具
 │   └── weixinAlert.js    # 微信告警工具
 └── config/               # 配置文件目录
 ```
@@ -41,8 +40,8 @@
 
 - **debug**: 调试日志输出
 - **dotenv**: 环境变量管理
-- **uuid**: 生成唯一标识符
 - **ws**: WebSocket客户端
+- **events**: Node.js 事件模块
 
 ## 安装要求
 
@@ -78,11 +77,6 @@ cp config/mqtt.json.example config/mqtt.json
 ```json
 {
   "debug": false,
-  "log_invalid_cookie": false,
-  "udp_server": {
-    "public_ip": "your-server-ip",
-    "port": 8884
-  },
   "development": {
     "mac_addresss": ["aa:bb:cc:dd:ee:ff"],
     "chat_servers": ["wss://dev-chat-server.example.com/ws"]
@@ -98,7 +92,9 @@ cp config/mqtt.json.example config/mqtt.json
 创建 `.env` 文件并设置以下环境变量:
 
 ```
-DEBUG=mqtt-server  # 启用调试输出
+MQTT_PORT=1883       # MQTT服务器端口
+UDP_PORT=8884        # UDP服务器端口
+PUBLIC_IP=your-ip    # 服务器公网IP
 ```
 
 ## 运行服务
@@ -130,15 +126,15 @@ pm2 monit
 ```
 
 服务将在以下端口启动:
-- MQTT 服务器: 端口 1883
-- UDP 服务器: 端口 8884
+- MQTT 服务器: 端口 1883 (可通过环境变量修改)
+- UDP 服务器: 端口 8884 (可通过环境变量修改)
 
 ## 协议说明
 
 ### 设备连接流程
 
 1. 设备通过MQTT协议连接到服务器
-2. 设备发送 `hello` 消息，包含音频参数
+2. 设备发送 `hello` 消息，包含音频参数和特性
 3. 服务器创建WebSocket连接到聊天服务器
 4. 服务器返回UDP连接参数给设备
 5. 设备通过UDP发送音频数据
@@ -152,7 +148,8 @@ pm2 monit
 {
   "type": "hello",
   "version": 3,
-  "audio_params": { ... }
+  "audio_params": { ... },
+  "features": { ... }
 }
 ```
 
@@ -180,6 +177,7 @@ pm2 monit
 - 每个会话使用唯一的加密密钥
 - 使用序列号防止重放攻击
 - 设备通过MAC地址进行身份验证
+- 支持设备分组和UUID验证
 
 ## 性能优化
 
@@ -187,6 +185,7 @@ pm2 monit
 - UDP协议用于高效传输音频数据
 - 定期清理不活跃的连接
 - 连接数和活跃连接数监控
+- 支持多聊天服务器负载均衡
 
 ## 故障排除
 
@@ -194,6 +193,7 @@ pm2 monit
 - 确保UDP端口在防火墙中开放
 - 启用调试模式查看详细日志
 - 检查配置文件中的聊天服务器地址是否正确
+- 验证设备认证信息是否正确
 
 ## 开发指南
 
@@ -202,6 +202,7 @@ pm2 monit
 1. 修改 `mqtt-protocol.js` 以支持新的MQTT功能
 2. 在 `MQTTConnection` 类中添加新的消息处理方法
 3. 更新配置管理器以支持新的配置选项
+4. 在 `WebSocketBridge` 类中添加新的WebSocket处理逻辑
 
 ### 调试技巧
 
@@ -212,7 +213,3 @@ DEBUG=* node app.js
 # 只启用MQTT服务器调试
 DEBUG=mqtt-server node app.js
 ```
-
-## 许可证
-
-[添加许可证信息]

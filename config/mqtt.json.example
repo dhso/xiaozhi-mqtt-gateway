@@ -11,6 +11,5 @@
         "mac_addresss": [
         ]
     },
-    "log_invalid_cookie": false,
     "debug": false
 }
