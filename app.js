@@ -94,6 +94,10 @@ class WebSocketBridge extends Emitter {
                     const message = JSON.parse(data.toString());
                     if (message.type === 'hello') {
                         resolve(message);
+                    } else if (message.type === 'mcp' && 
+                        this.connection.mcpCachedTools &&
+                        ['initialize','notifications/initialized', 'tools/list'].includes(message.payload.method)) {
+                        this.connection.onMcpMessageFromBridge(message);
                     } else {
                         this.connection.sendMqttMessage(JSON.stringify(message));
                     }
@@ -161,9 +165,10 @@ class MQTTConnection {
             remoteSequence: 0
         };
         this.headerBuffer = Buffer.alloc(16);
+        this.mcpPendingRequests = {};
 
         // 创建协议处理器，并传入socket
-        this.protocol = new MQTTProtocol(socket);
+        this.protocol = new MQTTProtocol(socket, configManager);
         
         this.setupProtocolHandlers();
     }
@@ -239,6 +244,7 @@ class MQTTConnection {
         this.replyTo = `devices/p2p/${parts[1]}`;
         
         this.server.addConnection(this);
+        this.initializeDeviceTools();
     }
 
     handleSubscribe(subscribeData) {
@@ -260,6 +266,12 @@ class MQTTConnection {
 
     close() {
         this.closing = true;
+        // 清理所有未完成的 MCP 请求
+        for (const request of Object.values(this.mcpPendingRequests)) {
+            request.reject(new Error('Connection closed'));
+        }
+        this.mcpPendingRequests = {};
+        
         if (this.bridge) {
             this.bridge.close();
             this.bridge = null;
@@ -397,6 +409,20 @@ class MQTTConnection {
     }
 
     async parseOtherMessage(json) {
+        if (json.type === 'mcp') {
+            const { id, error, result } = json.payload;
+            const request = this.mcpPendingRequests[id];
+            if (request) {
+                delete this.mcpPendingRequests[id];
+                if (error) {
+                    request.reject(new Error(error.message));
+                } else {
+                    request.resolve(result);
+                }
+                return;
+            }
+        }
+
         if (!this.bridge) {
             if (json.type !== 'goodbye') {
                 this.sendMqttMessage(JSON.stringify({ type: 'goodbye', session_id: json.session_id }));
@@ -436,6 +462,67 @@ class MQTTConnection {
 
     isAlive() {
         return this.bridge && this.bridge.isAlive();
+    }
+
+    // Cache device tools to MQTTConnection
+    async initializeDeviceTools() {
+        this.mcpRequestId = 10000;
+        this.mcpPendingRequests = {};
+        this.mcpCachedTools = [];
+    
+        try {
+            this.mcpCachedInitialize = await this.sendMcpRequest('initialize', {
+                protocolVersion: '2024-11-05',
+                capabilities: {},
+                clientInfo: {
+                    name: 'xiaozhi-mqtt-client',
+                    version: '1.0.0'
+                }
+            });
+            this.sendMqttMessage(JSON.stringify({
+                type: 'mcp',
+                payload: { jsonrpc: '2.0', method: 'notifications/initialized' }
+            }));
+
+            // list tools
+            let cursor = undefined;
+            do {
+                const { tools, nextCursor } = await this.sendMcpRequest('tools/list', { cursor });
+                this.mcpCachedTools = this.mcpCachedTools.concat(tools);
+                cursor = nextCursor;
+            } while (cursor !== undefined);
+            debug('初始化设备工具成功:', this.mcpCachedTools);
+        } catch (error) {
+            debug("Error initializing device tools", error);
+        }
+    }
+
+    sendMcpRequest(method, params) {
+        const id = this.mcpRequestId++;
+        return new Promise((resolve, reject) => {
+            this.mcpPendingRequests[id] = { resolve, reject };
+            this.sendMqttMessage(JSON.stringify({
+                type: 'mcp',
+                payload: { jsonrpc: '2.0', method, id, params }
+            }));
+        });
+    }
+
+    onMcpMessageFromBridge(message) {
+        const { method, id, params } = message.payload;
+        if (method === 'initialize') {
+            this.bridge.sendJson({
+                type: 'mcp',
+                payload: { jsonrpc: '2.0', id, result: this.mcpCachedInitialize }
+            });
+        } else if (method === 'tools/list') {
+            this.bridge.sendJson({
+                type: 'mcp',
+                payload: { jsonrpc: '2.0', id, result: { tools: this.mcpCachedTools } }
+            });
+        } else if (method === 'notifications/initialized') {
+            // do nothing
+        }
     }
 }
 

@@ -18,13 +18,14 @@ const PacketType = {
  * 负责MQTT协议的解析和封装，以及心跳维持
  */
 class MQTTProtocol extends EventEmitter {
-    constructor(socket) {
+    constructor(socket, configManager) {
         super();
         this.socket = socket;
         this.buffer = Buffer.alloc(0);
         this.isConnected = false;
         this.keepAliveInterval = 0;
         this.lastActivity = Date.now();
+        this.configManager = configManager;
         
         this.setupSocketHandlers();
     }
@@ -52,6 +53,7 @@ class MQTTProtocol extends EventEmitter {
      * 处理缓冲区中的所有完整消息
      */
     processBuffer() {
+        const maxPayloadSize = this.configManager.get('max_mqtt_payload_size') || 8192;
         // 持续处理缓冲区中的数据，直到没有完整的消息可以处理
         while (this.buffer.length > 0) {
             // 至少需要2个字节才能开始解析（1字节固定头部 + 至少1字节的剩余长度）
@@ -67,6 +69,11 @@ class MQTTProtocol extends EventEmitter {
                 
                 // 计算整个消息的长度
                 const messageLength = 1 + bytesRead + remainingLength;
+                if (messageLength > maxPayloadSize) {
+                    debug('消息长度超过最大限制:', messageLength);
+                    this.emit('protocolError', new Error(`消息长度超过最大限制: ${messageLength}`));
+                    return;
+                }
                 
                 // 检查缓冲区中是否有完整的消息
                 if (this.buffer.length < messageLength) {
@@ -486,8 +493,8 @@ class MQTTProtocol extends EventEmitter {
      * 关闭连接
      */
     close() {
-        if (this.socket.writable) {
-            this.socket.end();
+        if (this.socket) {
+            this.socket.destroy();
         }
     }
 }
