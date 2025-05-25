@@ -471,13 +471,16 @@ class MQTTConnection {
         this.mcpCachedTools = [];
     
         try {
+            const mcpClient = configManager.get('mcp_client') || {};
+            const capabilities = mcpClient.capabilities || {};
+            const clientInfo = mcpClient.client_info || {
+                name: 'xiaozhi-mqtt-client',
+                version: '1.0.0'
+            };
             this.mcpCachedInitialize = await this.sendMcpRequest('initialize', {
                 protocolVersion: '2024-11-05',
-                capabilities: {},
-                clientInfo: {
-                    name: 'xiaozhi-mqtt-client',
-                    version: '1.0.0'
-                }
+                capabilities,
+                clientInfo
             });
             this.sendMqttMessage(JSON.stringify({
                 type: 'mcp',
