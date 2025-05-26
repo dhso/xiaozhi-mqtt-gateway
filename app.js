@@ -489,8 +489,12 @@ class MQTTConnection {
 
             // list tools
             let cursor = undefined;
+            const maxToolsCount = configManager.get('mcp_client.max_tools_count') || 32;
             do {
                 const { tools, nextCursor } = await this.sendMcpRequest('tools/list', { cursor });
+                if (tools.length === 0 || (this.mcpCachedTools.length + tools.length) > maxToolsCount) {
+                    break;
+                }
                 this.mcpCachedTools = this.mcpCachedTools.concat(tools);
                 cursor = nextCursor;
             } while (cursor !== undefined);
