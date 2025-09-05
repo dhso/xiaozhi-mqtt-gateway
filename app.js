@@ -105,7 +105,9 @@ class WebSocketBridge extends Emitter {
             });
 
             this.wsClient.on('error', (error) => {
-                console.error(`WebSocket error for device ${this.macAddress}:`, error);
+                console.error(`WebSocket连接错误 ${this.macAddress}:`, error.message);
+                console.error(`连接地址: ${this.chatServer}`);
+                console.error(`错误详情:`, error);
                 this.emit('close');
                 reject(error);
             });
@@ -128,7 +130,10 @@ class WebSocketBridge extends Emitter {
             buffer.writeUInt32BE(timestamp, 8);
             buffer.writeUInt32BE(opus.length, 12);
             buffer.set(opus, 16);
+            console.log(`向WebSocket发送音频数据，opus长度: ${opus.length}, 时间戳: ${timestamp}`);
             this.wsClient.send(buffer, { binary: true });
+        } else {
+            console.error(`WebSocket连接不可用，无法发送音频数据`);
         }
     }
 
@@ -337,14 +342,17 @@ class MQTTConnection {
 
     sendUdpMessage(payload, timestamp) {
         if (!this.udp.remoteAddress) {
+            console.error(`设备 ${this.clientId} 未连接UDP，无法发送音频数据`);
             debug(`设备 ${this.clientId} 未连接，无法发送 UDP 消息`);
             return;
         }
+        console.log(`发送UDP音频数据到 ${this.clientId}, 长度: ${payload.length}, 时间戳: ${timestamp}`);
         this.udp.localSequence++;
         const header = this.generateUdpHeader(payload.length, timestamp, this.udp.localSequence);
         const cipher = crypto.createCipheriv(this.udp.encryption, this.udp.key, header);
         const message = Buffer.concat([header, cipher.update(payload), cipher.final()]);
         this.server.sendUdpMessage(message, this.udp.remoteAddress);
+        console.log(`UDP消息已发送，序列号: ${this.udp.localSequence}`);
     }
 
     generateUdpHeader(length, timestamp, sequence) {
@@ -386,7 +394,9 @@ class MQTTConnection {
 
         try {
             console.log(`通话开始: ${this.clientId} Protocol: ${json.version} ${this.bridge.chatServer}`);
+            console.log(`尝试连接WebSocket: ${this.bridge.chatServer}`);
             const helloReply = await this.bridge.connect(json.audio_params, json.features);
+            console.log(`WebSocket连接成功，session_id: ${helloReply.session_id}`);
             this.udp.session_id = helloReply.session_id;
             this.sendMqttMessage(JSON.stringify({
                 type: 'hello',
@@ -404,7 +414,9 @@ class MQTTConnection {
             }));
         } catch (error) {
             this.sendMqttMessage(JSON.stringify({ type: 'error', message: '处理 hello 消息失败' }));
-            console.error(`${this.clientId} 处理 hello 消息失败: ${error}`);
+            console.error(`${this.clientId} 处理 hello 消息失败: ${error.message}`);
+            console.error(`WebSocket服务器地址: ${this.bridge.chatServer}`);
+            console.error(`完整错误信息:`, error);
         }
     }
 
@@ -441,23 +453,65 @@ class MQTTConnection {
 
     onUdpMessage(rinfo, message, payloadLength, timestamp, sequence) {
         if (!this.bridge) {
+            console.log(`设备 ${this.clientId} bridge不存在，无法处理UDP音频`);
             return;
         }
         if (this.udp.remoteAddress !== rinfo) {
+            console.log(`设备 ${this.clientId} 首次UDP连接来自 ${rinfo.address}:${rinfo.port}`);
             this.udp.remoteAddress = rinfo;
+            // 初始化音频时间戳基准
+            this.udp.audioStartTime = Date.now();
+            this.udp.audioSequenceStart = sequence;
+            this.udp.remoteSequence = sequence - 1; // 设置为当前序列号-1，这样下次检查会通过
         }
         if (sequence < this.udp.remoteSequence) {
+            console.warn(`Received audio packet with old sequence: ${sequence}, expected: ${this.udp.remoteSequence}`, {
+                remoteAddress: rinfo.address,
+                remotePort: rinfo.port,
+                clientId: this.clientId
+            });
             return;
         }
+        if (sequence !== this.udp.remoteSequence + 1) {
+            console.warn(`Received audio packet with wrong sequence: ${sequence}, expected: ${this.udp.remoteSequence + 1}`, {
+                remoteAddress: rinfo.address,
+                remotePort: rinfo.port,
+                clientId: this.clientId
+            });
+        }
+
+        // 由于设备发送的时间戳为0，我们根据序列号生成时间戳
+        // 假设每个音频包60ms (Opus帧时长)，使用32位时间戳
+        const frameMs = 60;
+        const relativeTimeMs = (sequence - this.udp.audioSequenceStart) * frameMs;
+        // 使用相对时间戳，避免超出32位范围
+        const correctedTimestamp = (relativeTimeMs) % (2**32);
+        
+        console.log(`收到UDP音频数据从 ${this.clientId}, 长度: ${payloadLength}, 原时间戳: ${timestamp}, 修正时间戳: ${correctedTimestamp}, 序列号: ${sequence}`);
 
         // 处理加密数据
         const header = message.slice(0, 16);
         const encryptedPayload = message.slice(16, 16 + payloadLength);
-        const cipher = crypto.createDecipheriv(this.udp.encryption, this.udp.key, header);
-        const payload = Buffer.concat([cipher.update(encryptedPayload), cipher.final()]);
         
-        this.bridge.sendAudio(payload, timestamp);
-        this.udp.remoteSequence = sequence;
+        // 添加解密错误处理
+        try {
+            const cipher = crypto.createDecipheriv(this.udp.encryption, this.udp.key, header);
+            const payload = Buffer.concat([cipher.update(encryptedPayload), cipher.final()]);
+            
+            console.log(`UDP音频解密成功，转发到WebSocket，opus长度: ${payload.length}`);
+            // 使用修正后的时间戳
+            this.bridge.sendAudio(payload, correctedTimestamp);
+            this.udp.remoteSequence = sequence;
+        } catch (decryptionError) {
+            console.error(`UDP 解密失败: ${decryptionError.message}`, {
+                sequence: sequence,
+                expectedSequence: this.udp.remoteSequence + 1,
+                payloadLength: payloadLength,
+                remoteAddress: rinfo.address,
+                remotePort: rinfo.port
+            });
+            return;
+        }
     }
 
     isAlive() {
@@ -657,6 +711,10 @@ class MQTTServer {
     
             const timestamp = message.readUInt32BE(8);
             const sequence = message.readUInt32BE(12);
+            
+            // 调试UDP包头信息
+            console.log(`UDP包解析: 类型=${type}, 负载长度=${payloadLength}, 连接ID=${connectionId}, 时间戳=${timestamp}, 序列号=${sequence}`);
+            console.log(`UDP包头16字节: ${message.subarray(0, 16).toString('hex')}`);
             
             connection.onUdpMessage(rinfo, message, payloadLength, timestamp, sequence);
         } catch (error) {

@@ -13,12 +13,16 @@
     },
     "debug": false,
     "max_mqtt_payload_size": 8192,
+    "udp_enabled": true,
+    "udp_port": 18831,
+    "public_ip": "localhost",
     "mcp_client": {
         "capabilities": {
         },
         "client_info": {
             "name": "xiaozhi-mqtt-client",
             "version": "1.0.0"
-        }
+        },
+        "max_tools_count": 32
     }
 }
