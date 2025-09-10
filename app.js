@@ -347,7 +347,6 @@ class MQTTConnection {
         const cipher = crypto.createCipheriv(this.udp.encryption, this.udp.key, header);
         const message = Buffer.concat([header, cipher.update(payload), cipher.final()]);
         this.server.sendUdpMessage(message, this.udp.remoteAddress);
-        console.log(`UDP消息已发送，序列号: ${this.udp.localSequence}`);
     }
 
     generateUdpHeader(length, timestamp, sequence) {
@@ -454,11 +453,6 @@ class MQTTConnection {
             this.udp.remoteSequence = sequence - 1; // 设置为当前序列号-1，这样下次检查会通过
         }
         if (sequence < this.udp.remoteSequence) {
-            console.warn(`Received audio packet with old sequence: ${sequence}, expected: ${this.udp.remoteSequence}`, {
-                remoteAddress: rinfo.address,
-                remotePort: rinfo.port,
-                clientId: this.clientId
-            });
             return;
         }
         if (sequence !== this.udp.remoteSequence + 1) {
