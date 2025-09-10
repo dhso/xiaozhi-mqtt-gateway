@@ -53,8 +53,8 @@
 
 1. 克隆仓库
 ```bash
-git clone <仓库地址>
-cd mqtt-websocket-bridge
+git clone https://github.com/78/xiaozhi-mqtt-gateway.git
+cd xiaozhi-mqtt-gateway
 ```
 
 2. 安装依赖
@@ -92,9 +92,10 @@ cp config/mqtt.json.example config/mqtt.json
 创建 `.env` 文件并设置以下环境变量:
 
 ```
-MQTT_PORT=1883       # MQTT服务器端口
-UDP_PORT=8884        # UDP服务器端口
-PUBLIC_IP=your-ip    # 服务器公网IP
+MQTT_PORT=1883            # MQTT服务器端口
+UDP_PORT=8884             # UDP服务器端口
+PUBLIC_IP=your-ip         # 服务器公网IP
+MQTT_SIGNATURE_KEY=test   # MQTT签名密钥  
 ```
 
 ## 运行服务

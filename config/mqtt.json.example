@@ -13,9 +13,6 @@
     },
     "debug": false,
     "max_mqtt_payload_size": 8192,
-    "udp_enabled": true,
-    "udp_port": 18831,
-    "public_ip": "localhost",
     "mcp_client": {
         "capabilities": {
         },
