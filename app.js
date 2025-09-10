@@ -69,7 +69,7 @@ class WebSocketBridge extends Emitter {
             }
             if (this.userData && this.userData.ip) {
                 headers['x-forwarded-for'] = this.userData.ip;
-            } 
+            }
             this.wsClient = new WebSocket(this.chatServer, { headers });
 
             this.wsClient.on('open', () => {
@@ -94,9 +94,9 @@ class WebSocketBridge extends Emitter {
                     const message = JSON.parse(data.toString());
                     if (message.type === 'hello') {
                         resolve(message);
-                    } else if (message.type === 'mcp' && 
+                    } else if (message.type === 'mcp' &&
                         this.connection.mcpCachedTools &&
-                        ['initialize','notifications/initialized', 'tools/list'].includes(message.payload.method)) {
+                        ['initialize', 'notifications/initialized', 'tools/list'].includes(message.payload.method)) {
                         this.connection.onMcpMessageFromBridge(message);
                     } else {
                         this.connection.sendMqttMessage(JSON.stringify(message));
@@ -105,9 +105,7 @@ class WebSocketBridge extends Emitter {
             });
 
             this.wsClient.on('error', (error) => {
-                console.error(`WebSocket连接错误 ${this.macAddress}:`, error.message);
-                console.error(`连接地址: ${this.chatServer}`);
-                console.error(`错误详情:`, error);
+                console.error(`WebSocket error for device ${this.macAddress}:`, error);
                 this.emit('close');
                 reject(error);
             });
@@ -130,7 +128,6 @@ class WebSocketBridge extends Emitter {
             buffer.writeUInt32BE(timestamp, 8);
             buffer.writeUInt32BE(opus.length, 12);
             buffer.set(opus, 16);
-            console.log(`向WebSocket发送音频数据，opus长度: ${opus.length}, 时间戳: ${timestamp}`);
             this.wsClient.send(buffer, { binary: true });
         } else {
             console.error(`WebSocket连接不可用，无法发送音频数据`);
@@ -174,7 +171,7 @@ class MQTTConnection {
 
         // 创建协议处理器，并传入socket
         this.protocol = new MQTTProtocol(socket, configManager);
-        
+
         this.setupProtocolHandlers();
     }
 
@@ -216,8 +213,8 @@ class MQTTConnection {
         this.clientId = connectData.clientId;
         this.username = connectData.username;
         this.password = connectData.password;
-        
-        debug('客户端连接:', { 
+
+        debug('客户端连接:', {
             clientId: this.clientId,
             username: this.username,
             password: this.password,
@@ -247,14 +244,14 @@ class MQTTConnection {
             return;
         }
         this.replyTo = `devices/p2p/${parts[1]}`;
-        
+
         this.server.addConnection(this);
         this.initializeDeviceTools();
     }
 
     handleSubscribe(subscribeData) {
-        debug('客户端订阅主题:', { 
-            clientId: this.clientId, 
+        debug('客户端订阅主题:', {
+            clientId: this.clientId,
             topic: subscribeData.topic,
             packetId: subscribeData.packetId
         });
@@ -276,7 +273,7 @@ class MQTTConnection {
             request.reject(new Error('Connection closed'));
         }
         this.mcpPendingRequests = {};
-        
+
         if (this.bridge) {
             this.bridge.close();
             this.bridge = null;
@@ -288,13 +285,13 @@ class MQTTConnection {
     checkKeepAlive() {
         const now = Date.now();
         const keepAliveInterval = this.protocol.getKeepAliveInterval();
-        
+
         // 如果keepAliveInterval为0，表示不需要心跳检查
         if (keepAliveInterval === 0 || !this.protocol.isConnected) return;
-        
+
         const lastActivity = this.protocol.getLastActivity();
         const timeSinceLastActivity = now - lastActivity;
-        
+
         // 如果超过心跳间隔，关闭连接
         if (timeSinceLastActivity > keepAliveInterval) {
             debug('心跳超时，关闭连接:', this.clientId);
@@ -303,13 +300,13 @@ class MQTTConnection {
     }
 
     handlePublish(publishData) {
-        debug('收到发布消息:', { 
-            clientId: this.clientId, 
-            topic: publishData.topic, 
-            payload: publishData.payload, 
+        debug('收到发布消息:', {
+            clientId: this.clientId,
+            topic: publishData.topic,
+            payload: publishData.payload,
             qos: publishData.qos
         });
-        
+
         if (publishData.qos !== 0) {
             debug('不支持的 QoS 级别:', publishData.qos, '关闭连接');
             this.close();
@@ -342,11 +339,9 @@ class MQTTConnection {
 
     sendUdpMessage(payload, timestamp) {
         if (!this.udp.remoteAddress) {
-            console.error(`设备 ${this.clientId} 未连接UDP，无法发送音频数据`);
             debug(`设备 ${this.clientId} 未连接，无法发送 UDP 消息`);
             return;
         }
-        console.log(`发送UDP音频数据到 ${this.clientId}, 长度: ${payload.length}, 时间戳: ${timestamp}`);
         this.udp.localSequence++;
         const header = this.generateUdpHeader(payload.length, timestamp, this.udp.localSequence);
         const cipher = crypto.createCipheriv(this.udp.encryption, this.udp.key, header);
@@ -356,13 +351,13 @@ class MQTTConnection {
     }
 
     generateUdpHeader(length, timestamp, sequence) {
-      // 重用预分配的缓冲区
-      this.headerBuffer.writeUInt8(1, 0);
-      this.headerBuffer.writeUInt16BE(length, 2);
-      this.headerBuffer.writeUInt32BE(this.connectionId, 4);
-      this.headerBuffer.writeUInt32BE(timestamp, 8);
-      this.headerBuffer.writeUInt32BE(sequence, 12);
-      return Buffer.from(this.headerBuffer); // 返回副本以避免并发问题
+        // 重用预分配的缓冲区
+        this.headerBuffer.writeUInt8(1, 0);
+        this.headerBuffer.writeUInt16BE(length, 2);
+        this.headerBuffer.writeUInt32BE(this.connectionId, 4);
+        this.headerBuffer.writeUInt32BE(timestamp, 8);
+        this.headerBuffer.writeUInt32BE(sequence, 12);
+        return Buffer.from(this.headerBuffer); // 返回副本以避免并发问题
     }
 
     async parseHelloMessage(json) {
@@ -394,9 +389,7 @@ class MQTTConnection {
 
         try {
             console.log(`通话开始: ${this.clientId} Protocol: ${json.version} ${this.bridge.chatServer}`);
-            console.log(`尝试连接WebSocket: ${this.bridge.chatServer}`);
             const helloReply = await this.bridge.connect(json.audio_params, json.features);
-            console.log(`WebSocket连接成功，session_id: ${helloReply.session_id}`);
             this.udp.session_id = helloReply.session_id;
             this.sendMqttMessage(JSON.stringify({
                 type: 'hello',
@@ -414,9 +407,7 @@ class MQTTConnection {
             }));
         } catch (error) {
             this.sendMqttMessage(JSON.stringify({ type: 'error', message: '处理 hello 消息失败' }));
-            console.error(`${this.clientId} 处理 hello 消息失败: ${error.message}`);
-            console.error(`WebSocket服务器地址: ${this.bridge.chatServer}`);
-            console.error(`完整错误信息:`, error);
+            console.error(`${this.clientId} 处理 hello 消息失败: ${error}`);
         }
     }
 
@@ -441,23 +432,21 @@ class MQTTConnection {
             }
             return;
         }
-        
+
         if (json.type === 'goodbye') {
             this.bridge.close();
             this.bridge = null;
             return;
         }
-        
+
         this.bridge.sendJson(json);
     }
 
     onUdpMessage(rinfo, message, payloadLength, timestamp, sequence) {
         if (!this.bridge) {
-            console.log(`设备 ${this.clientId} bridge不存在，无法处理UDP音频`);
             return;
         }
         if (this.udp.remoteAddress !== rinfo) {
-            console.log(`设备 ${this.clientId} 首次UDP连接来自 ${rinfo.address}:${rinfo.port}`);
             this.udp.remoteAddress = rinfo;
             // 初始化音频时间戳基准
             this.udp.audioStartTime = Date.now();
@@ -485,19 +474,19 @@ class MQTTConnection {
         const frameMs = 60;
         const relativeTimeMs = (sequence - this.udp.audioSequenceStart) * frameMs;
         // 使用相对时间戳，避免超出32位范围
-        const correctedTimestamp = (relativeTimeMs) % (2**32);
-        
+        const correctedTimestamp = (relativeTimeMs) % (2 ** 32);
+
         console.log(`收到UDP音频数据从 ${this.clientId}, 长度: ${payloadLength}, 原时间戳: ${timestamp}, 修正时间戳: ${correctedTimestamp}, 序列号: ${sequence}`);
 
         // 处理加密数据
         const header = message.slice(0, 16);
         const encryptedPayload = message.slice(16, 16 + payloadLength);
-        
+
         // 添加解密错误处理
         try {
             const cipher = crypto.createDecipheriv(this.udp.encryption, this.udp.key, header);
             const payload = Buffer.concat([cipher.update(encryptedPayload), cipher.final()]);
-            
+
             console.log(`UDP音频解密成功，转发到WebSocket，opus长度: ${payload.length}`);
             // 使用修正后的时间戳
             this.bridge.sendAudio(payload, correctedTimestamp);
@@ -523,7 +512,7 @@ class MQTTConnection {
         this.mcpRequestId = 10000;
         this.mcpPendingRequests = {};
         this.mcpCachedTools = [];
-    
+
         try {
             const mcpClient = configManager.get('mcp_client') || {};
             const capabilities = mcpClient.capabilities || {};
@@ -623,11 +612,11 @@ class MQTTServer {
         this.udpServer = dgram.createSocket('udp4');
         this.udpServer.on('message', this.onUdpMessage.bind(this));
         this.udpServer.on('error', err => {
-          console.error('UDP 错误', err);
-          setTimeout(() => { process.exit(1); }, 1000);
+            console.error('UDP 错误', err);
+            setTimeout(() => { process.exit(1); }, 1000);
         });
         this.udpServer.bind(this.udpPort, () => {
-          console.warn(`UDP 服务器正在监听 ${this.publicIp}:${this.udpPort}`);
+            console.warn(`UDP 服务器正在监听 ${this.publicIp}:${this.udpPort}`);
         });
 
         // 启动全局心跳检查定时器
@@ -642,7 +631,7 @@ class MQTTServer {
         this.clearKeepAliveTimer();
         this.lastConnectionCount = 0;
         this.lastActiveConnectionCount = 0;
-        
+
         // 设置新的定时器
         this.keepAliveTimer = setInterval(() => {
             // 检查所有连接的心跳状态
@@ -697,25 +686,21 @@ class MQTTServer {
             console.warn('收到不完整的 UDP Header', rinfo);
             return;
         }
-    
+
         try {
             const type = message.readUInt8(0);
             if (type !== 1) return;
-    
+
             const payloadLength = message.readUInt16BE(2);
             if (message.length < 16 + payloadLength) return;
-    
+
             const connectionId = message.readUInt32BE(4);
             const connection = this.connections.get(connectionId);
             if (!connection) return;
-    
+
             const timestamp = message.readUInt32BE(8);
             const sequence = message.readUInt32BE(12);
-            
-            // 调试UDP包头信息
-            console.log(`UDP包解析: 类型=${type}, 负载长度=${payloadLength}, 连接ID=${connectionId}, 时间戳=${timestamp}, 序列号=${sequence}`);
-            console.log(`UDP包头16字节: ${message.subarray(0, 16).toString('hex')}`);
-            
+
             connection.onUdpMessage(rinfo, message, payloadLength, timestamp, sequence);
         } catch (error) {
             console.error('UDP 消息处理错误:', error);
@@ -732,7 +717,7 @@ class MQTTServer {
         this.stopping = true;
         // 清除心跳检查定时器
         this.clearKeepAliveTimer();
-        
+
         if (this.connections.size > 0) {
             console.warn(`等待 ${this.connections.size} 个连接关闭`);
             for (const connection of this.connections.values()) {
@@ -748,7 +733,7 @@ class MQTTServer {
             this.udpServer = null;
             console.warn('UDP 服务器已停止');
         }
-        
+
         // 关闭MQTT服务器
         if (this.mqttServer) {
             this.mqttServer.close();
