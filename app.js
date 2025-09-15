@@ -907,9 +907,50 @@ function calculateAndPrintDailyToken() {
     }
 }
 
+// 验证MQTT_SIGNATURE_KEY的密码复杂度
+function validateSignatureKeyComplexity() {
+    const signatureKey = process.env.MQTT_SIGNATURE_KEY;
+
+    if (!signatureKey) {
+        console.error('无法启动管理API服务: 未设置MQTT_SIGNATURE_KEY环境变量');
+        return false;
+    }
+
+    // 检查长度是否大于等于8位
+    if (signatureKey.length < 8) {
+        console.error('无法启动管理API服务: MQTT_SIGNATURE_KEY长度必须大于等于8位');
+        return false;
+    }
+
+    // 检查是否包含大写字母
+    if (!/[A-Z]/.test(signatureKey)) {
+        console.error('无法启动管理API服务: MQTT_SIGNATURE_KEY必须包含至少一个大写字母');
+        return false;
+    }
+
+    // 检查是否包含小写字母
+    if (!/[a-z]/.test(signatureKey)) {
+        console.error('无法启动管理API服务: MQTT_SIGNATURE_KEY必须包含至少一个小写字母');
+        return false;
+    }
+
+    // 检查是否包含不允许的字符串
+    const forbiddenStrings = ['test', '1234', 'admin', 'password', 'qwerty', 'xiaozhi'];
+    for (const forbidden of forbiddenStrings) {
+        if (signatureKey.toLowerCase().includes(forbidden)) {
+            console.error(`无法启动管理API服务: MQTT_SIGNATURE_KEY不能包含'${forbidden}'弱密码，请更换后重启本服务`);
+            return false;
+        }
+    }
+
+    return true;
+}
+
 // 启动管理API服务
-app.listen(adminPort, () => {
-    console.log(`管理API服务启动在端口 ${adminPort}`);
-    // 计算并打印当天的临时密钥
-    calculateAndPrintDailyToken();
-});
+if (validateSignatureKeyComplexity()) {
+    app.listen(adminPort, () => {
+        console.log(`管理API服务启动在端口 ${adminPort}`);
+        // 计算并打印当天的临时密钥
+        calculateAndPrintDailyToken();
+    });
+}
