@@ -575,7 +575,8 @@ class MQTTServer {
         this.mqttPort = parseInt(process.env.MQTT_PORT) || 1883;
         this.udpPort = parseInt(process.env.UDP_PORT) || this.mqttPort;
         this.publicIp = process.env.PUBLIC_IP || 'mqtt.xiaozhi.me';
-        this.connections = new Map(); // clientId -> MQTTConnection
+        this.connections = new Map(); // connectionId -> MQTTConnection
+        this.clientIdMap = new Map(); // clientId -> MQTTConnection
         this.keepAliveTimer = null;
         this.keepAliveCheckInterval = 1000; // 默认每1秒检查一次
 
@@ -661,12 +662,22 @@ class MQTTServer {
             }
         }
         this.connections.set(connection.connectionId, connection);
+
+        // 添加到索引映射中
+        if (connection.clientId) {
+            this.clientIdMap.set(connection.clientId, connection);
+        }
     }
 
     removeConnection(connection) {
         debug(`关闭连接: ${connection.connectionId}`);
         if (this.connections.has(connection.connectionId)) {
             this.connections.delete(connection.connectionId);
+        }
+
+        // 从索引映射中移除
+        if (connection.clientId && this.clientIdMap.has(connection.clientId)) {
+            this.clientIdMap.delete(connection.clientId);
         }
     }
 
@@ -737,6 +748,14 @@ class MQTTServer {
 
         process.exit(0);
     }
+
+    // 通过clientId或macAddress快速查找连接
+    getConnectionById(deviceId) {
+        if (this.clientIdMap.has(deviceId)) {
+            return this.clientIdMap.get(deviceId);
+        }
+        return null;
+    }
 }
 
 // 创建并启动服务器
@@ -745,4 +764,152 @@ server.start();
 process.on('SIGINT', () => {
     console.warn('收到 SIGINT 信号，开始关闭');
     server.stop();
+});
+
+// 添加管理API服务，用于向设备下发指令并获取响应
+const express = require('express');
+const app = express();
+const adminPort = process.env.API_PORT || 8007;
+
+app.use(express.json());
+
+// 计算当天的令牌的辅助函数
+function calculateDailyToken() {
+    try {
+        // 获取当前日期（yyyy-MM-dd格式）
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = String(now.getMonth() + 1).padStart(2, '0');
+        const day = String(now.getDate()).padStart(2, '0');
+        const currentDate = `${year}-${month}-${day}`;
+
+        // 从环境变量获取签名密钥
+        const signatureKey = process.env.MQTT_SIGNATURE_KEY;
+
+        // 计算令牌
+        const tokenString = currentDate + signatureKey;
+        return crypto.createHash('sha256').update(tokenString).digest('hex');
+    } catch (error) {
+        console.error('计算令牌失败:', error);
+        throw error;
+    }
+}
+
+// 验证Authorization头的中间件
+function authenticateRequest(req, res, next) {
+    try {
+        // 获取Authorization头
+        const authHeader = req.headers.authorization;
+
+        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+            return res.status(401).json({ error: '未提供有效的Authorization头' });
+        }
+
+        // 提取token
+        const token = authHeader.split(' ')[1];
+
+        // 计算预期的token
+        const expectedToken = calculateDailyToken();
+
+        // 验证token
+        if (token !== expectedToken) {
+            return res.status(401).json({ error: '无效的授权令牌' });
+        }
+
+        // 验证通过，继续处理请求
+        next();
+    } catch (error) {
+        res.status(401).json({ error: '授权验证失败' });
+    }
+}
+
+// 设备指令下发API - 支持MCP指令并返回设备响应
+app.post('/api/commands/:deviceId', authenticateRequest, async (req, res) => {
+    try {
+        const { deviceId } = req.params;
+        const command = req.body;
+
+        console.log(`收到设备 ${deviceId} 的指令:`, command);
+
+        // 查找对应设备的连接 - 优化后的查找方式
+        const targetConnection = server.getConnectionById(deviceId);
+
+        if (!targetConnection) {
+            return res.status(404).json({ error: '设备未连接' });
+        }
+
+        // 处理MCP类型的命令
+        if (command.type === 'mcp' && command.payload) {
+            const { method, params } = command.payload;
+
+            try {
+                // 使用现有的sendMcpRequest方法发送请求并等待响应
+                const result = await targetConnection.sendMcpRequest(method, params);
+                res.json({
+                    success: true,
+                    data: result
+                });
+            } catch (error) {
+                res.status(500).json({
+                    success: false,
+                    error: error.message
+                });
+            }
+        } else {
+            // 处理非MCP类型的命令
+            targetConnection.sendMqttMessage(JSON.stringify(command));
+            res.json({ success: true });
+        }
+    } catch (error) {
+        console.error('处理指令下发错误:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// 获取指定设备在线状态的API
+app.post('/api/devices/status', authenticateRequest, (req, res) => {
+    try {
+        const { deviceIds } = req.body;
+
+        // 验证参数
+        if (!deviceIds || !Array.isArray(deviceIds)) {
+            return res.status(400).json({ error: 'deviceIds必须是一个数组' });
+        }
+
+        // 构建设备状态map
+        const deviceStatusMap = {};
+        deviceIds.forEach(deviceId => {
+            const connection = server.getConnectionById(deviceId);
+            deviceStatusMap[deviceId] = {
+                isAlive: connection ? connection.isAlive() : false,
+                exists: !!connection
+            };
+        });
+
+        res.json(deviceStatusMap);
+    } catch (error) {
+        console.error('处理设备状态查询错误:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// 计算并打印当天的临时密钥
+function calculateAndPrintDailyToken() {
+    try {
+        // 调用共享的辅助函数计算令牌
+        const dailyToken = calculateDailyToken();
+
+        // 打印令牌信息
+        console.log('API今日临时密钥: Authorization: Bearer ' + dailyToken);
+        return dailyToken;
+    } catch (error) {
+        console.error('计算临时密钥失败:', error);
+    }
+}
+
+// 启动管理API服务
+app.listen(adminPort, () => {
+    console.log(`管理API服务启动在端口 ${adminPort}`);
+    // 计算并打印当天的临时密钥
+    calculateAndPrintDailyToken();
 });

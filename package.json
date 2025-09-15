@@ -9,6 +9,7 @@
   "dependencies": {
     "debug": "^4.3.4",
     "dotenv": "^16.4.7",
+    "express": "^4.19.2",
     "ws": "^8.18.1"
   }
 }
