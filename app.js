@@ -541,10 +541,27 @@ class MQTTConnection {
         }
     }
 
-    sendMcpRequest(method, params) {
+    sendMcpRequest(method, params, timeout = 10000) {
         const id = this.mcpRequestId++;
         return new Promise((resolve, reject) => {
-            this.mcpPendingRequests[id] = { resolve, reject };
+            // 设置超时定时器
+            const timer = setTimeout(() => {
+                if (this.mcpPendingRequests[id]) {
+                    delete this.mcpPendingRequests[id];
+                    reject(new Error('timeout'));
+                }
+            }, timeout);
+
+            this.mcpPendingRequests[id] = {
+                resolve: (value) => {
+                    clearTimeout(timer);
+                    resolve(value);
+                },
+                reject: (error) => {
+                    clearTimeout(timer);
+                    reject(error);
+                }
+            };
             this.sendMqttMessage(JSON.stringify({
                 type: 'mcp',
                 payload: { jsonrpc: '2.0', method, id, params }
@@ -675,9 +692,10 @@ class MQTTServer {
             this.connections.delete(connection.connectionId);
         }
 
-        // 从索引映射中移除
         if (connection.clientId && this.clientIdMap.has(connection.clientId)) {
-            this.clientIdMap.delete(connection.clientId);
+            if (this.clientIdMap.get(connection.clientId).connectionId === connection.connectionId) {
+                this.clientIdMap.delete(connection.clientId);
+            }
         }
     }
 
@@ -749,10 +767,17 @@ class MQTTServer {
         process.exit(0);
     }
 
-    // 通过clientId或macAddress快速查找连接
-    getConnectionById(deviceId) {
-        if (this.clientIdMap.has(deviceId)) {
-            return this.clientIdMap.get(deviceId);
+    // 通过clientId查找连接
+    getConnectionById(clientId) {
+        if (this.clientIdMap.has(clientId)) {
+            return this.clientIdMap.get(clientId);
+        }
+        for (const connection of this.connections.values()) {
+            if (connection.clientId && connection.clientId == clientId) {
+                console.log('connectionid', connection.connectionId);
+                this.clientIdMap.set(connection.clientId, connection);
+                return connection;
+            }
         }
         return null;
     }
@@ -824,27 +849,20 @@ function authenticateRequest(req, res, next) {
 }
 
 // 设备指令下发API - 支持MCP指令并返回设备响应
-app.post('/api/commands/:deviceId', authenticateRequest, async (req, res) => {
+app.post('/api/commands/:clientId', authenticateRequest, async (req, res) => {
     try {
-        const { deviceId } = req.params;
+        const { clientId } = req.params;
         const command = req.body;
-
-        console.log(`收到设备 ${deviceId} 的指令:`, command);
-
-        // 查找对应设备的连接 - 优化后的查找方式
-        const targetConnection = server.getConnectionById(deviceId);
-
+        const targetConnection = server.getConnectionById(clientId);
         if (!targetConnection) {
-            return res.status(404).json({ error: '设备未连接' });
+            return res.status(500).json({ success: false, error: '设备未连接' });
         }
 
         // 处理MCP类型的命令
         if (command.type === 'mcp' && command.payload) {
             const { method, params } = command.payload;
-
             try {
-                // 使用现有的sendMcpRequest方法发送请求并等待响应
-                const result = await targetConnection.sendMcpRequest(method, params);
+                const result = await targetConnection.sendMcpRequest(method, params, 5000);
                 res.json({
                     success: true,
                     data: result
@@ -856,31 +874,29 @@ app.post('/api/commands/:deviceId', authenticateRequest, async (req, res) => {
                 });
             }
         } else {
-            // 处理非MCP类型的命令
-            targetConnection.sendMqttMessage(JSON.stringify(command));
-            res.json({ success: true });
+            res.status(500).json({ success: false, error: '指令类型无效' });
         }
     } catch (error) {
         console.error('处理指令下发错误:', error);
-        res.status(500).json({ error: error.message });
+        res.status(500).json({ success: false, error: error.message });
     }
 });
 
 // 获取指定设备在线状态的API
 app.post('/api/devices/status', authenticateRequest, (req, res) => {
     try {
-        const { deviceIds } = req.body;
+        const { clientIds } = req.body;
 
         // 验证参数
-        if (!deviceIds || !Array.isArray(deviceIds)) {
-            return res.status(400).json({ error: 'deviceIds必须是一个数组' });
+        if (!clientIds || !Array.isArray(clientIds)) {
+            return res.status(400).json({ error: 'clientIds必须是一个数组' });
         }
 
         // 构建设备状态map
         const deviceStatusMap = {};
-        deviceIds.forEach(deviceId => {
-            const connection = server.getConnectionById(deviceId);
-            deviceStatusMap[deviceId] = {
+        clientIds.forEach(clientId => {
+            const connection = server.getConnectionById(clientId);
+            deviceStatusMap[clientId] = {
                 isAlive: connection ? connection.isAlive() : false,
                 exists: !!connection
             };
