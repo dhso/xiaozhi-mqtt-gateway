@@ -96,7 +96,7 @@ class WebSocketBridge extends Emitter {
                         resolve(message);
                     } else if (message.type === 'mcp' &&
                         this.connection.mcpCachedTools &&
-                        ['initialize', 'notifications/initialized', 'tools/list'].includes(message.payload.method)) {
+                        ['notifications/initialized', 'tools/list'].includes(message.payload.method)) {
                         this.connection.onMcpMessageFromBridge(message);
                     } else {
                         this.connection.sendMqttMessage(JSON.stringify(message));
