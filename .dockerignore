@@ -1,0 +1,45 @@
+# 依赖目录
+node_modules
+
+# 环境变量文件
+.env
+.env.*
+
+# Git 相关
+.git
+.gitignore
+.gitattributes
+
+# 文档
+README.md
+LICENSE
+*.md
+
+# 日志文件
+*.log
+logs
+
+# 构建目录
+build
+dist
+
+# IDE 和编辑器
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# 操作系统文件
+.DS_Store
+Thumbs.db
+
+# 测试和覆盖率
+coverage
+.nyc_output
+
+# PM2 日志
+.pm2
+
+# 本地配置
+mqtt.json

@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  mqtt-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: xiaozhi-mqtt-gateway
+    restart: unless-stopped
+    ports:
+      - "1883:1883"      # MQTT 端口
+      - "1883:1883/udp"  # UDP 端口
+      - "8007:8007"      # 管理 API 端口
+    environment:
+      - MQTT_PORT=1883
+      - UDP_PORT=1883
+      - PUBLIC_IP=mqtt.xiaozhi.me
+      - API_PORT=8007
+      - KEEP_ALIVE_CHECK_INTERVAL=1000
+      - MQTT_SIGNATURE_KEY=${MQTT_SIGNATURE_KEY}
+    volumes:
+      # 持久化日志 (可选)
+      - ./logs:/root/.pm2/logs
+      # 持久化配置 (如果需要)
+      # - ./mqtt.json:/app/mqtt.json
+    networks:
+      - mqtt-network
+    # 健康检查
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "1883"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  mqtt-network:
+    driver: bridge

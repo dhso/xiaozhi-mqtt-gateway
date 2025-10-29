@@ -595,7 +595,7 @@ class MQTTServer {
         this.connections = new Map(); // connectionId -> MQTTConnection
         this.clientIdMap = new Map(); // clientId -> MQTTConnection
         this.keepAliveTimer = null;
-        this.keepAliveCheckInterval = 1000; // 默认每1秒检查一次
+        this.keepAliveCheckInterval = parseInt(process.env.KEEP_ALIVE_CHECK_INTERVAL) || 1000; // 默认每1秒检查一次
 
         this.headerBuffer = Buffer.alloc(16);
     }
